@@ -12,7 +12,17 @@ async function rateLimit(kv: KVNamespace, key: string, limit: number, windowSec:
   if (st.c >= limit) return false; st.c += 1;
   await kv.put(k, JSON.stringify(st), { expirationTtl: windowSec * 2 }); return true;
 }
-function authOk(req: Request, env: Env): boolean { const h = req.headers.get('X-Echo-API-Key') || req.headers.get('Authorization')?.replace('Bearer ', '') || ''; return h === env.ECHO_API_KEY; }
+export function timingSafeEqual(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (!a || !b) return false;
+  const enc = new TextEncoder(); const bufA = enc.encode(a); const bufB = enc.encode(b);
+  const len = Math.max(bufA.length, bufB.length, 1);
+  const padA = new Uint8Array(len); const padB = new Uint8Array(len);
+  padA.set(bufA); padB.set(bufB);
+  let diff = bufA.length ^ bufB.length;
+  for (let i = 0; i < len; i++) diff |= padA[i] ^ padB[i];
+  return diff === 0;
+}
+export function authOk(req: Request, env: Env): boolean { const h = req.headers.get('X-Echo-API-Key') || req.headers.get('Authorization')?.replace('Bearer ', '') || ''; return !!env.ECHO_API_KEY && timingSafeEqual(h, env.ECHO_API_KEY); }
 function slog(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) { const entry = { ts: new Date().toISOString(), level, worker: 'echo-asset-manager', version: '1.0.1', msg, ...data }; if (level === 'error') console.error(JSON.stringify(entry)); else console.log(JSON.stringify(entry)); }
 function json(data: unknown, status = 200) { return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }); }
 function err(msg: string, status = 400) { slog('warn', msg, { status }); return json({ error: msg }, status); }
@@ -48,14 +58,15 @@ function withSecHeaders(res: Response): Response {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }
 
-export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+async function handle(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url); const p = url.pathname; const m = req.method;
     if (m === 'OPTIONS') return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,X-Echo-API-Key,Authorization' } });
     if (p === '/') return json({ service: 'echo-asset-manager', status: 'operational' });
     if (p === '/health') return json({ ok: true, service: 'echo-asset-manager', version: '1.0.0', timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19) });
     if (m === 'GET') { const ip = req.headers.get('CF-Connecting-IP') || 'unknown'; if (!await rateLimit(env.AM_CACHE, `get:${ip}`, 60, 60)) return err('Rate limited', 429); }
-    if (m !== 'GET' && m !== 'OPTIONS' && !authOk(req, env)) return err('Unauthorized', 401);
+    // Every route past this point serves or mutates org-scoped asset/user/insurance/financial data.
+    // Only '/' and '/health' (handled above, before this check) are public.
+    if (m !== 'OPTIONS' && !authOk(req, env)) return err('Unauthorized', 401);
 
     try {
       // ── Organizations ──
@@ -207,6 +218,11 @@ export default {
 
       return err('Not found', 404);
     } catch (e: any) { slog('error', 'Internal error', { error: e.message, path: p }); return json({ error: 'Internal error', detail: e.message }, 500); }
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    return withSecHeaders(await handle(req, env));
   },
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {

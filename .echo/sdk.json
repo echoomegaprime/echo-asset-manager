@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "echo-asset-manager",
+  "capabilities": [],
+  "note": "No echo.asset_manager.* or similar capability is registered in arcanum_sdk.sdk_capabilities for this repo (checked echo.asset%, echo.asset_manager%, and %asset% broadly -- the 6 matches found, echo.crucible.recon_assetfinder / echo.crucible.security.scc_assets / echo.eoai.assets.list / echo.eoai.assets.upload / echo.google.cloudops.asset_search / echo.google.security.scc_assets, all belong to unrelated systems: OSINT recon, cloud security posture, and media-asset upload/list. This service is not currently SDK-gate-integrated.",
+  "entrypoints": ["scripts/certforge_journey.py"],
+  "data_classification": "restricted",
+  "network": "none"
+}
